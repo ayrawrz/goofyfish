@@ -1019,8 +1019,9 @@ addEventListener('resize', resize);
 resize();
 
 // Poses.
-P.strap = mk({ hF: [4, -136], eF: [12, -114], hB: [-2, -57] });
-const SWING = (f, b) => ({ hF: f, eF: [f[0] - 6, -78], hB: b, hang: 0 });
+P.strap = mk({ hF: [4, -128], eF: [12, -108], hB: [-2, -57] });
+// Walking down a train you keep the front hand up, ready for the next strap; the back arm swings.
+const SWING = (f, b) => ({ hF: [f[0], -102 + (f[1] + 60) * 0.5], eF: [f[0] - 2, -86], hB: b, hang: 0 });
 const WALK = [
   mk(Object.assign({ hip: [0, -63], fF: [18, -8], fB: [-16, -8], kF: [24, -36], kB: [-4, -36] }, SWING([16, -62], [-2, -57]))),
   mk(Object.assign({ hip: [0, -66], fF: [2, -8], fB: [-6, -22], kF: [12, -38], kB: [10, -40] }, SWING([10, -60], [3, -58]))),
@@ -1032,10 +1033,12 @@ P.sit = mk({ head: [2, -102], chest: [1, -77], hip: [0, -46], fF: [26, -8], fB: 
 P.phone = mk(P.sit, P.sit);
 Object.assign(P.phone, { head: [4, -100], hF: [16, -68], eF: [4, -60], hB: [12, -66], eB: [0, -58] });
 P.flop = mk(P.sit, P.sit);
-Object.assign(P.flop, { head: [-4, -103], chest: [-3, -78], hF: [22, -96], eF: [10, -82], hB: [-14, -92], eB: [-16, -74] });
+Object.assign(P.flop, { head: [-4, -103], chest: [-3, -78], hF: [20, -86], eF: [10, -76], hB: [-6, -82], eB: [4, -70] });
 P.bent = mk({ head: [12, -114], chest: [7, -91], hF: [26, -60], eF: [14, -78], hB: [0, -58] });
 // Expecting: leaning back a little, one hand on the bump, one on the lower back.
-P.preg = mk({ head: [-2, -118], chest: [-2, -96], hF: [18, -70], eF: [8, -82], hB: [-9, -64], eB: [-14, -80], hang: 0 });
+// Standing riders lurch forward on the brakes but keep hold of the strap.
+P.lurch = mk({ head: [7, -119], chest: [5, -95], hF: [6, -128], eF: [14, -108], hB: [2, -57] });
+P.preg = mk({ head: [-2, -118], chest: [-2, -96], hF: [18, -70], eF: [8, -82], hB: [-6, -62], eB: [-10, -76], hang: 0 });
 
 function blend(a, b, k) {
   const o = { face: 1, hang: lerp(a.hang ?? 1, b.hang ?? 1, k) };
@@ -1044,6 +1047,20 @@ function blend(a, b, k) {
   }
   return o;
 }
+// Poses ease on a critically damped spring, so a joint never snaps when the target pose changes.
+function spring(o, target, dt, w = 13) {
+  const v = o.v || (o.v = {});
+  const k = w * w, c = 2 * w;
+  const pose = { face: 1, hang: lerp(o.pose.hang ?? 1, target.hang ?? 1, Math.min(1, dt * 6)) };
+  for (const key of PTS) {
+    const p = o.pose[key], t = target[key], vel = v[key] || (v[key] = [0, 0]);
+    vel[0] += (k * (t[0] - p[0]) - c * vel[0]) * dt;
+    vel[1] += (k * (t[1] - p[1]) - c * vel[1]) * dt;
+    pose[key] = [p[0] + vel[0] * dt, p[1] + vel[1] * dt];
+  }
+  o.pose = pose;
+}
+
 function walkPose(ph) {
   const u = ((ph / (Math.PI * 2)) % 1 + 1) % 1;
   return pathPose(WALK, u);
@@ -1082,7 +1099,7 @@ function layoutCrowd() {
     [spots[i], spots[j]] = [spots[j], spots[i]];
   }
   crowd.length = Math.min(crowd.length, spots.length);
-  crowd = crowd.map((_, i) => ({ id: 'c' + i, x: spots[i] + (Math.random() - 0.5) * 8, pose: P.strap, flip: Math.random() < 0.5, ph: Math.random() * 6 }));
+  crowd = crowd.map((_, i) => ({ id: 'c' + stop + '_' + i, x: spots[i] + (Math.random() - 0.5) * 8, pose: P.strap, flip: Math.random() < 0.5, ph: Math.random() * 6 }));
 }
 
 function newRound() {
@@ -1120,7 +1137,9 @@ function newRound() {
     p: { x: SEAT - 170 - Math.random() * 10, st: 'walk', fall: 0, rot: 0, ph: 0 },
     nextJolt: 0.9 + Math.random() * 1.1, warn: 0, jolt: 0, warnDur: Math.max(0.36, 0.75 - n * 0.025), winner: null,
   };
+  me.id = 'me' + stop + '_' + Math.random().toString(36).slice(2, 6);
   me.pose = P.strap;
+  me.v = {};
 }
 
 function startGame() {
@@ -1282,7 +1301,7 @@ function update(dt) {
   trainV += ((jolting ? 0.15 : phase === 'banner' && mode === 'play' ? 0.4 : 1) - trainV) * Math.min(1, dt * 4);
   scroll += dt * 150 * trainV;
   for (const s of sitters) {
-    s.pose = R && R.jolt > 0 ? blend(s.pose, P.flop, Math.min(1, dt * 12)) : blend(s.pose, P.phone, Math.min(1, dt * 5));
+    spring(s, R && R.jolt > 0 ? P.flop : P.phone, dt, 8);
   }
   if (!R) {
     return;
@@ -1410,7 +1429,6 @@ function win(who, r) {
   holding = false;
   const p = R.p;
   if (who === 'p') {
-    p.x = SEAT;
     p.st = 'seat';
     dust(SEAT, 0, 30, 6);
     if (R.prio) {
@@ -1422,7 +1440,6 @@ function win(who, r) {
       SND.seat();
     }
   } else {
-    r.x = SEAT;
     r.st = 'seat';
     dust(SEAT, 0, 30, 6);
     if (R.prio) {
@@ -1439,22 +1456,27 @@ function win(who, r) {
 }
 
 function animate(dt) {
-  const p = R.p, k = Math.min(1, dt * 14);
+  const p = R.p;
   const J = R.jolt > 0;
   if (p.st === 'seat') {
-    me.pose = blend(me.pose, P.sit, Math.min(1, dt * 9));
+    spring(me, P.sit, dt);
+    p.x += (SEAT - p.x) * Math.min(1, dt * 8);
   } else if (p.st === 'fallen') {
-    me.pose = blend(me.pose, P.wince, k);
+    spring(me, P.wince, dt);
   } else if (holding && mode === 'play' && phase === 'race') {
-    me.pose = blend(me.pose, walkPose(p.ph), k);
+    spring(me, walkPose(p.ph), dt, 16);
   } else {
-    me.pose = blend(me.pose, P.strap, Math.min(1, dt * 10));
+    spring(me, P.strap, dt);
   }
-  p.rot = lerp(p.rot, p.st === 'fallen' ? 1.4 : 0, Math.min(1, dt * (p.st === 'fallen' ? 16 : 6)));
+  // The fall tips over on a spring too.
+  const rt = p.st === 'fallen' ? 1.4 : 0, w = p.st === 'fallen' ? 11 : 7;
+  p.rv = (p.rv || 0) + (w * w * (rt - p.rot) - 2 * w * (p.rv || 0)) * dt;
+  p.rot += p.rv * dt;
   for (const r of R.rs) {
     const old = r.type === 'cane' || r.type === 'belly';
     if (r.st === 'seat') {
-      r.pose = blend(r.pose, P.sit, Math.min(1, dt * 9));
+      spring(r, P.sit, dt);
+      r.x += (SEAT - r.x) * Math.min(1, dt * 8);
     } else if (mode === 'play' && phase === 'race' && !J && r.delay <= 0) {
       let wp = walkPose(r.ph);
       if (r.type === 'cane') {
@@ -1462,13 +1484,13 @@ function animate(dt) {
       } else if (r.type === 'belly') {
         wp = blend(wp, P.preg, 0.65);
       }
-      r.pose = blend(r.pose, wp, k);
+      spring(r, wp, dt, 16);
     } else {
-      r.pose = blend(r.pose, r.type === 'belly' ? P.preg : old ? P.bent : P.strap, Math.min(1, dt * 10));
+      spring(r, r.type === 'belly' ? P.preg : old ? P.bent : J ? P.lurch : P.strap, dt);
     }
   }
   for (const c of crowd) {
-    c.pose = J ? blend(c.pose, P.wince, Math.min(1, dt * 10)) : blend(c.pose, P.strap, Math.min(1, dt * 6));
+    spring(c, J ? P.lurch : P.strap, dt, 10);
   }
 }
 
